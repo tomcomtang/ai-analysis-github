@@ -1,4 +1,28 @@
 import { NextRequest } from 'next/server'
+import { analyzeReadme, ReadmeAnalysis } from '../../../lib/ai-analyzer'
+
+// 简单的fallback分析函数
+function analyzeReadmeFallback(content: string): ReadmeAnalysis {
+  const text = content.toLowerCase()
+  
+  const staticKeywords = ['blog', 'portfolio', 'gallery', 'game', 'demo', 'website', 'react', 'vue', 'next.js']
+  const previewKeywords = ['demo', 'preview', 'live', 'vercel.app', 'netlify.app']
+  const deployKeywords = ['deploy', 'vercel', 'netlify']
+  
+  const isStaticDeploy = staticKeywords.some(keyword => text.includes(keyword))
+  const hasPreviewUrl = previewKeywords.some(keyword => text.includes(keyword))
+  const hasDeployButtons = deployKeywords.some(keyword => text.includes(keyword))
+  
+  return {
+    isStaticDeploy,
+    hasPreviewUrl,
+    hasDeployButtons,
+    previewUrls: [],
+    deployPlatforms: [],
+    confidence: isStaticDeploy ? 0.5 : 0.2,
+    summary: '基于描述的基础分析'
+  }
+}
 
 function encodeEvent(data: any) {
   return `data: ${JSON.stringify(data)}\n\n`
@@ -48,6 +72,25 @@ export async function GET(req: NextRequest) {
         
         // 处理第一页数据
         for (const item of (json.items || [])) {
+          // 获取README内容
+          let readmeAnalysis: ReadmeAnalysis | null = null
+          try {
+            const readmeUrl = `https://api.github.com/repos/${item.full_name}/readme`
+            const readmeRes = await fetch(readmeUrl, { headers: ghHeaders, signal })
+            if (readmeRes.ok) {
+              const readmeData = await readmeRes.json()
+              const readmeContent = Buffer.from(readmeData.content, 'base64').toString('utf-8')
+              readmeAnalysis = await analyzeReadme(readmeContent, item.full_name)
+            } else {
+              // 如果README获取失败，使用fallback分析
+              readmeAnalysis = analyzeReadmeFallback(item.description || '')
+            }
+          } catch (err) {
+            console.error(`Failed to fetch README for ${item.full_name}:`, err)
+            // 如果README获取失败，使用fallback分析
+            readmeAnalysis = analyzeReadmeFallback(item.description || '')
+          }
+
           const result = {
             full_name: item.full_name,
             description: item.description,
@@ -59,6 +102,7 @@ export async function GET(req: NextRequest) {
             owner: item.owner?.login || '',
             owner_avatar: item.owner?.avatar_url || '',
             owner_html_url: item.owner?.html_url || '',
+            readme_analysis: readmeAnalysis,
           }
           send({ type: 'result', result })
         }
@@ -79,6 +123,25 @@ export async function GET(req: NextRequest) {
             
             const nextJson = await nextRes.json()
             for (const item of (nextJson.items || [])) {
+              // 获取README内容
+              let readmeAnalysis: ReadmeAnalysis | null = null
+              try {
+                const readmeUrl = `https://api.github.com/repos/${item.full_name}/readme`
+                const readmeRes = await fetch(readmeUrl, { headers: ghHeaders, signal })
+                if (readmeRes.ok) {
+                  const readmeData = await readmeRes.json()
+                  const readmeContent = Buffer.from(readmeData.content, 'base64').toString('utf-8')
+                  readmeAnalysis = await analyzeReadme(readmeContent, item.full_name)
+                } else {
+                  // 如果README获取失败，使用fallback分析
+                  readmeAnalysis = analyzeReadmeFallback(item.description || '')
+                }
+              } catch (err) {
+                console.error(`Failed to fetch README for ${item.full_name}:`, err)
+                // 如果README获取失败，使用fallback分析
+                readmeAnalysis = analyzeReadmeFallback(item.description || '')
+              }
+
               const result = {
                 full_name: item.full_name,
                 description: item.description,
@@ -90,6 +153,7 @@ export async function GET(req: NextRequest) {
                 owner: item.owner?.login || '',
                 owner_avatar: item.owner?.avatar_url || '',
                 owner_html_url: item.owner?.html_url || '',
+                readme_analysis: readmeAnalysis,
               }
               send({ type: 'result', result })
             }
@@ -108,7 +172,7 @@ export async function GET(req: NextRequest) {
       }
     },
     cancel() {
-      controller.close()
+      controller.abort()
     },
   })
 

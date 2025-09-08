@@ -22,6 +22,7 @@ export default function HomePage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
   const [perPage] = useState(5) // 固定每页5条
+  const [showStaticOnly, setShowStaticOnly] = useState(false) // 是否只显示静态部署项目
   const esRef = useRef<EventSource | null>(null)
 
   // 计算当前页显示的数据
@@ -82,6 +83,11 @@ export default function HomePage() {
     setRunning(false)
   }
 
+  const toggleStaticFilter = () => {
+    setShowStaticOnly(!showStaticOnly)
+    setCurrentPage(1) // 重置到第一页
+  }
+
   return (
     <div className="space-y-8">
       <SearchForm onSubmit={handleSearch} disabled={disabled} />
@@ -95,12 +101,14 @@ export default function HomePage() {
       <StageBar stage={stage} />
 
       <ResultsTable 
-        rows={currentPageData}
+        rows={allData}
         currentPage={currentPage}
         totalCount={allData.length}
         perPage={perPage}
         onPageChange={handlePageChange}
         running={running}
+        showStaticOnly={showStaticOnly}
+        onToggleStaticFilter={toggleStaticFilter}
       />
     </div>
   )

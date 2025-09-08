@@ -3,6 +3,16 @@
 import { useState } from 'react'
 import clsx from 'clsx'
 
+type ReadmeAnalysis = {
+  isStaticDeploy: boolean
+  hasPreviewUrl: boolean
+  hasDeployButtons: boolean
+  previewUrls: string[]
+  deployPlatforms: string[]
+  confidence: number
+  summary: string
+}
+
 type Repo = {
   full_name: string
   description: string
@@ -14,6 +24,7 @@ type Repo = {
   owner: string
   owner_avatar: string
   owner_html_url: string
+  readme_analysis?: ReadmeAnalysis | null
 }
 
 type ResultsTableProps = {
@@ -23,6 +34,8 @@ type ResultsTableProps = {
   perPage: number
   onPageChange: (page: number) => void
   running: boolean
+  showStaticOnly?: boolean
+  onToggleStaticFilter?: () => void
 }
 
 export default function ResultsTable({ 
@@ -31,54 +44,93 @@ export default function ResultsTable({
   totalCount, 
   perPage, 
   onPageChange, 
-  running 
+  running,
+  showStaticOnly = false,
+  onToggleStaticFilter
 }: ResultsTableProps) {
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
-  const [showModal, setShowModal] = useState(false)
 
-  const showRepoDetail = (repo: Repo) => {
-    setSelectedRepo(repo)
-    setShowModal(true)
-  }
+  // 筛选静态部署项目 - 更严格的条件
+  const filteredRows = showStaticOnly 
+    ? rows.filter(repo => {
+        const analysis = repo.readme_analysis
+        if (!analysis) return false
+        
+        // 必须是静态项目且有预览地址，或者有部署按钮
+        return analysis.isStaticDeploy && 
+               (analysis.hasPreviewUrl || analysis.hasDeployButtons) &&
+               analysis.confidence > 0.3  // 置信度阈值
+      })
+    : rows
 
-  const closeModal = () => {
-    setShowModal(false)
-    setSelectedRepo(null)
-  }
-
-  const totalPages = Math.ceil(totalCount / perPage)
+  const totalPages = Math.ceil(filteredRows.length / perPage)
   const startItem = (currentPage - 1) * perPage + 1
-  const endItem = Math.min(currentPage * perPage, totalCount)
+  const endItem = Math.min(currentPage * perPage, filteredRows.length)
+  
+  // 获取当前页的数据
+  const currentPageData = filteredRows.slice((currentPage - 1) * perPage, currentPage * perPage)
 
   return (
     <>
+      {/* 筛选控制栏 */}
+      <div className="card p-4 mb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-300">
+              显示 {filteredRows.length} 条结果
+              {showStaticOnly && ' (可直接运行/部署的静态项目)'}
+            </span>
+            {onToggleStaticFilter && (
+              <button
+                onClick={onToggleStaticFilter}
+                className={clsx(
+                  'px-3 py-1 text-xs rounded transition',
+                  showStaticOnly
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                )}
+              >
+                {showStaticOnly ? '显示所有' : '仅可运行项目'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="card">
         <div className="overflow-hidden rounded-xl">
-          <table className="min-w-full text-sm">
+          <table className="w-full text-sm table-fixed" style={{ tableLayout: 'fixed' }}>
             <thead className="bg-gray-800/50">
               <tr className="text-gray-300 h-12">
-                <Th>仓库</Th>
-                <Th>作者</Th>
-                <Th>描述</Th>
-                <Th>语言</Th>
-                <Th>Stars</Th>
-                <Th>Forks</Th>
-                <Th>更新时间</Th>
-                <Th>操作</Th>
+                <Th style={{ width: '20%' }}>仓库</Th>
+                <Th style={{ width: '12%' }}>作者</Th>
+                <Th style={{ width: '18%' }}>描述</Th>
+                <Th style={{ width: '8%' }}>语言</Th>
+                <Th style={{ width: '10%' }}>AI分析</Th>
+                <Th style={{ width: '15%' }}>预览地址</Th>
+                <Th style={{ width: '8%' }}>Stars</Th>
+                <Th style={{ width: '9%' }}>操作</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-700">
-              {rows.map((r, i) => (
+              {currentPageData.map((r, i) => (
                 <tr key={i} className="hover:bg-gray-800/50 h-16">
                   <Td>
-                    <a className="text-emerald-400 hover:underline font-medium" href={r.html_url} target="_blank" rel="noreferrer">{r.full_name}</a>
+                    <a 
+                      className="text-emerald-400 hover:underline font-medium block truncate" 
+                      href={r.html_url} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      title={r.full_name}
+                    >
+                      {r.full_name}
+                    </a>
                   </Td>
                   <Td>
                     <div className="flex items-center gap-2">
                       <img 
                         src={r.owner_avatar} 
                         alt={r.owner}
-                        className="w-6 h-6 rounded-full"
+                        className="w-6 h-6 rounded-full flex-shrink-0"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none'
                         }}
@@ -87,41 +139,85 @@ export default function ResultsTable({
                         href={r.owner_html_url} 
                         target="_blank" 
                         rel="noreferrer"
-                        className="text-emerald-400 hover:underline text-sm"
+                        className="text-emerald-400 hover:underline text-sm truncate"
+                        title={r.owner}
                       >
                         {r.owner}
                       </a>
                     </div>
                   </Td>
                   <Td className="text-gray-300">
-                    <div className="truncate max-w-[200px]" title={r.description || ''}>
+                    <div className="truncate" title={r.description || ''}>
                       {r.description || '无描述'}
                     </div>
                   </Td>
                   <Td>
-                    <span className="badge border-emerald-200 text-emerald-300 bg-emerald-900/30">{r.language || 'N/A'}</span>
-                  </Td>
-                  <Td className="font-medium text-white">{r.stargazers_count?.toLocaleString() || 0}</Td>
-                  <Td className="font-medium text-white">{r.forks_count?.toLocaleString() || 0}</Td>
-                  <Td className="text-gray-300">
-                    <div className="truncate max-w-[120px]" title={new Date(r.updated_at).toLocaleString()}>
-                      {new Date(r.updated_at).toLocaleDateString()}
-                    </div>
+                    <span className="badge border-emerald-200 text-emerald-300 bg-emerald-900/30 text-xs">{r.language || 'N/A'}</span>
                   </Td>
                   <Td>
-                    <button
-                      onClick={() => showRepoDetail(r)}
-                      className="text-emerald-400 hover:text-emerald-300 text-xs px-2 py-1 rounded hover:bg-emerald-900/30"
+                    {r.readme_analysis ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          <div className={clsx(
+                            'w-2 h-2 rounded-full flex-shrink-0',
+                            r.readme_analysis.isStaticDeploy ? 'bg-emerald-500' : 'bg-gray-500'
+                          )} />
+                          <span className="text-xs text-gray-300 truncate">
+                            {r.readme_analysis.isStaticDeploy ? '可运行' : '非静态'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-400 truncate">
+                          {Math.round(r.readme_analysis.confidence * 100)}%
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-500">分析中...</span>
+                    )}
+                  </Td>
+                  <Td>
+                    {r.readme_analysis?.previewUrls && r.readme_analysis.previewUrls.length > 0 ? (
+                      <div className="flex flex-col gap-1">
+                        {r.readme_analysis.previewUrls.slice(0, 1).map((url, idx) => (
+                          <a
+                            key={idx}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-emerald-400 hover:underline text-xs truncate"
+                            title={url}
+                          >
+                            {url.replace(/^https?:\/\//, '')}
+                          </a>
+                        ))}
+                        {r.readme_analysis.previewUrls.length > 1 && (
+                          <span className="text-xs text-gray-500">
+                            +{r.readme_analysis.previewUrls.length - 1}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-500">无预览</span>
+                    )}
+                  </Td>
+                  <Td className="font-medium text-white text-center">{r.stargazers_count?.toLocaleString() || 0}</Td>
+                  <Td>
+                    <a
+                      href={r.html_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-emerald-400 hover:text-emerald-300 text-xs px-2 py-1 rounded hover:bg-emerald-900/30 inline-block"
                     >
-                      详情
-                    </button>
+                      访问
+                    </a>
                   </Td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {currentPageData.length === 0 && (
                 <tr>
                   <Td colSpan={8}>
-                    <div className="text-center text-gray-400 py-10">暂无数据</div>
+                    <div className="text-center text-gray-400 py-10">
+                      {showStaticOnly ? '暂无符合条件的可直接运行/部署项目' : '暂无数据'}
+                    </div>
                   </Td>
                 </tr>
               )}
@@ -131,11 +227,12 @@ export default function ResultsTable({
       </div>
 
       {/* 分页信息 */}
-      {totalCount > 0 && (
+      {filteredRows.length > 0 && (
         <div className="card p-4">
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-300">
-              显示 {startItem}-{endItem} 条，共 {totalCount.toLocaleString()} 条结果
+              显示 {startItem}-{endItem} 条，共 {filteredRows.length.toLocaleString()} 条结果
+              {showStaticOnly && ' (已筛选可运行项目)'}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -190,97 +287,6 @@ export default function ResultsTable({
         </div>
       )}
 
-      {/* 详情弹窗 */}
-      {showModal && selectedRepo && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden border border-gray-700">
-            <div className="p-6 border-b border-gray-700">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-white">{selectedRepo.full_name}</h3>
-                  <p className="text-sm text-gray-300 mt-1">{selectedRepo.description || '无描述'}</p>
-                </div>
-                <button
-                  onClick={closeModal}
-                  className="text-gray-400 hover:text-gray-200 text-xl"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-            <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-              <div className="flex items-center gap-3 p-3 bg-gray-800 rounded-lg">
-                <img 
-                  src={selectedRepo.owner_avatar} 
-                  alt={selectedRepo.owner}
-                  className="w-12 h-12 rounded-full"
-                  onError={(e) => {
-                    e.currentTarget.style.display = 'none'
-                  }}
-                />
-                <div>
-                  <label className="text-xs font-medium text-gray-400">作者</label>
-                  <a 
-                    href={selectedRepo.owner_html_url} 
-                    target="_blank" 
-                    rel="noreferrer"
-                    className="text-emerald-400 hover:underline text-lg font-medium block"
-                  >
-                    {selectedRepo.owner}
-                  </a>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-400">语言</label>
-                  <p className="text-sm text-white">{selectedRepo.language || 'N/A'}</p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-400">Stars</label>
-                  <p className="text-sm text-white">{selectedRepo.stargazers_count?.toLocaleString() || 0}</p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-400">Forks</label>
-                  <p className="text-sm text-white">{selectedRepo.forks_count?.toLocaleString() || 0}</p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-400">更新时间</label>
-                  <p className="text-sm text-white">{new Date(selectedRepo.updated_at).toLocaleString()}</p>
-                </div>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-400">仓库链接</label>
-                <a
-                  href={selectedRepo.html_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-emerald-400 hover:underline text-sm block mt-1"
-                >
-                  {selectedRepo.html_url}
-                </a>
-              </div>
-            </div>
-            <div className="p-6 border-t border-gray-700 bg-gray-800">
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={closeModal}
-                  className="btn-secondary"
-                >
-                  关闭
-                </button>
-                <a
-                  href={selectedRepo.html_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn-primary"
-                >
-                  访问仓库
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }
