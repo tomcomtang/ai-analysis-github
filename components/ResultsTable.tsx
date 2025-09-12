@@ -3,14 +3,20 @@
 import { useState } from 'react'
 import clsx from 'clsx'
 
-type ReadmeAnalysis = {
-  isStaticDeploy: boolean
-  hasPreviewUrl: boolean
-  hasDeployButtons: boolean
-  previewUrls: string[]
-  deployPlatforms: string[]
-  confidence: number
-  summary: string
+type ComprehensiveAnalysis = {
+  readme: any
+  about: any
+  fileStructure: any
+  combinedPreviewUrls: string[]
+  combinedConfidence: number
+  finalAssessment: {
+    isStaticDeploy: boolean
+    hasPreviewUrl: boolean
+    hasDeployButtons: boolean
+    deployPlatforms: string[]
+    confidence: number
+    summary: string
+  }
 }
 
 type Repo = {
@@ -24,7 +30,7 @@ type Repo = {
   owner: string
   owner_avatar: string
   owner_html_url: string
-  readme_analysis?: ReadmeAnalysis | null
+  comprehensive_analysis?: ComprehensiveAnalysis | null
 }
 
 type ResultsTableProps = {
@@ -36,6 +42,10 @@ type ResultsTableProps = {
   running: boolean
   showStaticOnly?: boolean
   onToggleStaticFilter?: () => void
+  currentDataRange?: { start: number; end: number }
+  loadingMore?: boolean
+  githubTotalCount?: number
+  onLoadMore?: () => void
 }
 
 export default function ResultsTable({ 
@@ -46,19 +56,40 @@ export default function ResultsTable({
   onPageChange, 
   running,
   showStaticOnly = false,
-  onToggleStaticFilter
+  onToggleStaticFilter,
+  currentDataRange,
+  loadingMore = false,
+  githubTotalCount = 0,
+  onLoadMore
 }: ResultsTableProps) {
 
-  // 筛选静态部署项目 - 更严格的条件
+  // 筛选静态部署项目 - 只显示静态项目，过滤需要接口服务的项目
   const filteredRows = showStaticOnly 
     ? rows.filter(repo => {
-        const analysis = repo.readme_analysis
+        const analysis = repo.comprehensive_analysis
         if (!analysis) return false
         
-        // 必须是静态项目且有预览地址，或者有部署按钮
-        return analysis.isStaticDeploy && 
-               (analysis.hasPreviewUrl || analysis.hasDeployButtons) &&
-               analysis.confidence > 0.3  // 置信度阈值
+        // 必须是静态项目（不需要接口服务）
+        const isStatic = analysis.finalAssessment.isStaticDeploy
+        
+        // 排除需要接口服务的项目特征
+        const hasBackendFeatures = 
+          repo.description?.toLowerCase().includes('api') ||
+          repo.description?.toLowerCase().includes('server') ||
+          repo.description?.toLowerCase().includes('backend') ||
+          repo.description?.toLowerCase().includes('database') ||
+          repo.description?.toLowerCase().includes('mysql') ||
+          repo.description?.toLowerCase().includes('postgresql') ||
+          repo.description?.toLowerCase().includes('mongodb') ||
+          repo.description?.toLowerCase().includes('redis') ||
+          repo.language === 'Go' ||
+          repo.language === 'Java' ||
+          repo.language === 'C#' ||
+          repo.language === 'Python' ||
+          repo.language === 'PHP' ||
+          repo.language === 'Ruby'
+        
+        return isStatic && !hasBackendFeatures && analysis.finalAssessment.confidence > 0.3
       })
     : rows
 
@@ -71,30 +102,6 @@ export default function ResultsTable({
 
   return (
     <>
-      {/* 筛选控制栏 */}
-      <div className="card p-4 mb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-300">
-              显示 {filteredRows.length} 条结果
-              {showStaticOnly && ' (可直接运行/部署的静态项目)'}
-            </span>
-            {onToggleStaticFilter && (
-              <button
-                onClick={onToggleStaticFilter}
-                className={clsx(
-                  'px-3 py-1 text-xs rounded transition',
-                  showStaticOnly
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                )}
-              >
-                {showStaticOnly ? '显示所有' : '仅可运行项目'}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
 
       <div className="card">
         <div className="overflow-hidden rounded-xl">
@@ -155,19 +162,19 @@ export default function ResultsTable({
                     <span className="badge border-emerald-200 text-emerald-300 bg-emerald-900/30 text-xs">{r.language || 'N/A'}</span>
                   </Td>
                   <Td>
-                    {r.readme_analysis ? (
+                    {r.comprehensive_analysis ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1">
                           <div className={clsx(
                             'w-2 h-2 rounded-full flex-shrink-0',
-                            r.readme_analysis.isStaticDeploy ? 'bg-emerald-500' : 'bg-gray-500'
+                            r.comprehensive_analysis.finalAssessment.isStaticDeploy ? 'bg-emerald-500' : 'bg-gray-500'
                           )} />
                           <span className="text-xs text-gray-300 truncate">
-                            {r.readme_analysis.isStaticDeploy ? '可运行' : '非静态'}
+                            {r.comprehensive_analysis.finalAssessment.isStaticDeploy ? '可运行' : '非静态'}
                           </span>
                         </div>
                         <div className="text-xs text-gray-400 truncate">
-                          {Math.round(r.readme_analysis.confidence * 100)}%
+                          {Math.round(r.comprehensive_analysis.finalAssessment.confidence * 100)}%
                         </div>
                       </div>
                     ) : (
@@ -175,9 +182,9 @@ export default function ResultsTable({
                     )}
                   </Td>
                   <Td>
-                    {r.readme_analysis?.previewUrls && r.readme_analysis.previewUrls.length > 0 ? (
+                    {r.comprehensive_analysis?.combinedPreviewUrls && r.comprehensive_analysis.combinedPreviewUrls.length > 0 ? (
                       <div className="flex flex-col gap-1">
-                        {r.readme_analysis.previewUrls.slice(0, 1).map((url, idx) => (
+                        {r.comprehensive_analysis.combinedPreviewUrls.slice(0, 1).map((url, idx) => (
                           <a
                             key={idx}
                             href={url}
@@ -189,9 +196,9 @@ export default function ResultsTable({
                             {url.replace(/^https?:\/\//, '')}
                           </a>
                         ))}
-                        {r.readme_analysis.previewUrls.length > 1 && (
+                        {r.comprehensive_analysis.combinedPreviewUrls.length > 1 && (
                           <span className="text-xs text-gray-500">
-                            +{r.readme_analysis.previewUrls.length - 1}
+                            +{r.comprehensive_analysis.combinedPreviewUrls.length - 1}
                           </span>
                         )}
                       </div>
@@ -226,62 +233,100 @@ export default function ResultsTable({
         </div>
       </div>
 
-      {/* 分页信息 */}
+      {/* 合并的数据范围和分页信息 */}
       {filteredRows.length > 0 && (
-        <div className="card p-4">
+        <div className="card p-4 bg-emerald-900/20 border-emerald-500/30">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-300">
-              显示 {startItem}-{endItem} 条，共 {filteredRows.length.toLocaleString()} 条结果
-              {showStaticOnly && ' (已筛选可运行项目)'}
+            {/* 左侧：数据范围信息 */}
+            <div className="flex items-center gap-4">
+              <div className="text-sm text-emerald-300">
+                {loadingMore ? (
+                  <span>🔄 正在加载更多数据...</span>
+                ) : (
+                  <>
+                    📊 当前显示从GitHub拉取的第 <span className="font-semibold">{currentDataRange?.start || 0}</span> 到第 <span className="font-semibold">{currentDataRange?.end || 0}</span> 条结果
+                    {githubTotalCount > 0 && (
+                      <span className="ml-2">（共 {githubTotalCount.toLocaleString()} 条结果）</span>
+                    )}
+                  </>
+                )}
+              </div>
+              
+              {/* 加载更多按钮 */}
+              {onLoadMore && (
+                <button 
+                  onClick={onLoadMore}
+                  disabled={loadingMore || running || (currentDataRange?.end || 0) >= githubTotalCount}
+                  className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed text-xs px-3 py-1"
+                >
+                  {loadingMore ? '加载中...' : '加载更多1000条'}
+                </button>
+              )}
             </div>
+            
+            {/* 右侧：简化的分页控件 */}
             <div className="flex items-center gap-2">
+              {/* 首页 */}
+              <button
+                onClick={() => onPageChange(1)}
+                disabled={currentPage <= 1 || running}
+                className="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
+              >
+                首页
+              </button>
+              
+              {/* 上一页 */}
               <button
                 onClick={() => onPageChange(currentPage - 1)}
                 disabled={currentPage <= 1 || running}
-                className="px-3 py-1 text-sm border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
+                className="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
               >
                 上一页
               </button>
               
-              <div className="flex items-center gap-1">
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum
-                  if (totalPages <= 5) {
-                    pageNum = i + 1
-                  } else if (currentPage <= 3) {
-                    pageNum = i + 1
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i
-                  } else {
-                    pageNum = currentPage - 2 + i
-                  }
-                  
-                  return (
-                    <button
-                      key={pageNum}
-                      onClick={() => onPageChange(pageNum)}
-                      disabled={running}
-                      className={clsx(
-                        'px-3 py-1 text-sm border rounded',
-                      currentPage === pageNum
-                        ? 'bg-emerald-600 text-white border-emerald-600'
-                        : 'border-gray-600 hover:bg-gray-700 text-gray-300',
-                        running && 'opacity-50 cursor-not-allowed'
-                      )}
-                    >
-                      {pageNum}
-                    </button>
-                  )
-                })}
-              </div>
+              {/* 当前页 */}
+              <span className="px-3 py-1 text-xs bg-emerald-600 text-white rounded">
+                {currentPage}
+              </span>
               
+              {/* 下一页 */}
               <button
                 onClick={() => onPageChange(currentPage + 1)}
                 disabled={currentPage >= totalPages || running}
-                className="px-3 py-1 text-sm border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
+                className="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
               >
                 下一页
               </button>
+              
+              {/* 末页 */}
+              <button
+                onClick={() => onPageChange(totalPages)}
+                disabled={currentPage >= totalPages || running}
+                className="px-2 py-1 text-xs border border-gray-600 rounded hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300"
+              >
+                末页
+              </button>
+              
+              {/* 快速跳转 */}
+              <div className="flex items-center gap-1 ml-3">
+                <span className="text-xs text-gray-400">跳转</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={totalPages}
+                  defaultValue={currentPage}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const targetPage = parseInt((e.target as HTMLInputElement).value)
+                      if (targetPage >= 1 && targetPage <= totalPages) {
+                        onPageChange(targetPage)
+                      }
+                    }
+                  }}
+                  className="w-12 px-1 py-1 text-xs border border-gray-600 rounded bg-gray-800 text-white text-center"
+                  disabled={running}
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -5,7 +5,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
       <body className="min-h-screen text-white">
-        <header className="sticky top-0 z-10 border-b border-gray-700/40 bg-gray-900/60 backdrop-blur">
+        <header className="sticky top-0 z-50 border-b border-gray-700/40 bg-gray-900/95 backdrop-blur">
           <div className="mx-auto max-w-6xl px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="h-9 w-9 rounded-lg bg-emerald-600 text-white grid place-items-center font-bold">AI</div>

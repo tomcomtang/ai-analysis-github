@@ -1,28 +1,7 @@
 import { NextRequest } from 'next/server'
-import { analyzeReadme, ReadmeAnalysis } from '../../../lib/ai-analyzer'
+import { Octokit } from '@octokit/rest'
 
-// 简单的fallback分析函数
-function analyzeReadmeFallback(content: string): ReadmeAnalysis {
-  const text = content.toLowerCase()
-  
-  const staticKeywords = ['blog', 'portfolio', 'gallery', 'game', 'demo', 'website', 'react', 'vue', 'next.js']
-  const previewKeywords = ['demo', 'preview', 'live', 'vercel.app', 'netlify.app']
-  const deployKeywords = ['deploy', 'vercel', 'netlify']
-  
-  const isStaticDeploy = staticKeywords.some(keyword => text.includes(keyword))
-  const hasPreviewUrl = previewKeywords.some(keyword => text.includes(keyword))
-  const hasDeployButtons = deployKeywords.some(keyword => text.includes(keyword))
-  
-  return {
-    isStaticDeploy,
-    hasPreviewUrl,
-    hasDeployButtons,
-    previewUrls: [],
-    deployPlatforms: [],
-    confidence: isStaticDeploy ? 0.5 : 0.2,
-    summary: '基于描述的基础分析'
-  }
-}
+// 暂时移除AI分析，只返回基础数据
 
 function encodeEvent(data: any) {
   return `data: ${JSON.stringify(data)}\n\n`
@@ -33,8 +12,10 @@ export async function GET(req: NextRequest) {
   const query = searchParams.get('query') || ''
   const language = searchParams.get('language') || ''
   const stars = searchParams.get('stars') || ''
-  const per_page = Number(searchParams.get('per_page') || '1000') // 默认100条
+  const aiFilter = searchParams.get('aiFilter') || ''
+  const per_page = Number(searchParams.get('per_page') || '100')
   const page = Number(searchParams.get('page') || '1')
+  const start_page = Number(searchParams.get('start_page') || '1') // 新增：起始页面参数
 
   const controller = new AbortController()
   const { signal } = controller
@@ -44,53 +25,64 @@ export async function GET(req: NextRequest) {
       const send = (obj: any) => controller.enqueue(new TextEncoder().encode(encodeEvent(obj)))
       try {
         send({ type: 'stage', stage: 'searching' })
-        const q: string[] = []
-        if (query) q.push(query)
-        if (language) q.push(`language:${language}`)
-        if (stars) q.push(`stars:${stars}`)
-        const url = new URL('https://api.github.com/search/repositories')
-        url.searchParams.set('q', q.join(' '))
-        url.searchParams.set('sort', 'stars')
-        url.searchParams.set('order', 'desc')
-        url.searchParams.set('per_page', String(per_page))
-        url.searchParams.set('page', String(page))
-
-        const ghHeaders: Record<string, string> = {
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
+        
+        // 初始化Octokit
+        const githubToken = process.env.GITHUB_TOKEN
+        if (!githubToken) {
+          throw new Error('GITHUB_TOKEN environment variable is required')
         }
-        if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`
 
-        const res = await fetch(url, { headers: ghHeaders, signal })
-        if (!res.ok) throw new Error(`GitHub API error: ${res.status}`)
-        const json = await res.json()
+        const octokit = new Octokit({
+          auth: githubToken
+        })
+
+        // 构建搜索查询
+        const searchQuery: string[] = []
+        if (query) searchQuery.push(query)
+        if (language) {
+          // 单选语言，直接添加
+          searchQuery.push(`language:${language}`)
+        }
+        if (stars) searchQuery.push(`stars:>=${stars}`)
+
+        const q = searchQuery.join(' ')
+        console.log('GitHub search query:', q)
+        console.log('Search parameters:', {
+          q,
+          sort: 'stars',
+          order: 'desc',
+          per_page: Math.min(per_page, 100),
+          page
+        })
+        
+        // 输出等效的GitHub网页搜索URL
+        const webSearchUrl = `https://github.com/search?q=${encodeURIComponent(q)}&type=repositories&s=stars&o=desc`
+        console.log('Equivalent GitHub web search URL:', webSearchUrl)
+
+        // 使用Octokit搜索仓库
+        const searchResponse = await octokit.rest.search.repos({
+          q,
+          sort: 'stars',
+          order: 'desc',
+          per_page: Math.min(per_page, 100), // GitHub API限制每页最多100条
+          page
+        })
+
+        console.log("GitHub API Response:")
+        console.log("- Total count:", searchResponse.data.total_count)
+        console.log("- Items length:", searchResponse.data.items.length)
+        console.log("- First 5 repositories:")
+        searchResponse.data.items.slice(0, 5).forEach((repo, index) => {
+          console.log(`  ${index + 1}. ${repo.full_name} (⭐${repo.stargazers_count}, ${repo.language || 'No language'})`)
+        })
 
         // 发送总数
-        send({ type: 'total_count', total_count: json.total_count || 0 })
+        send({ type: 'total_count', total_count: searchResponse.data.total_count })
 
-        send({ type: 'stage', stage: 'analyzing' })
+        send({ type: 'stage', stage: 'processing' })
         
-        // 处理第一页数据
-        for (const item of (json.items || [])) {
-          // 获取README内容
-          let readmeAnalysis: ReadmeAnalysis | null = null
-          try {
-            const readmeUrl = `https://api.github.com/repos/${item.full_name}/readme`
-            const readmeRes = await fetch(readmeUrl, { headers: ghHeaders, signal })
-            if (readmeRes.ok) {
-              const readmeData = await readmeRes.json()
-              const readmeContent = Buffer.from(readmeData.content, 'base64').toString('utf-8')
-              readmeAnalysis = await analyzeReadme(readmeContent, item.full_name)
-            } else {
-              // 如果README获取失败，使用fallback分析
-              readmeAnalysis = analyzeReadmeFallback(item.description || '')
-            }
-          } catch (err) {
-            console.error(`Failed to fetch README for ${item.full_name}:`, err)
-            // 如果README获取失败，使用fallback分析
-            readmeAnalysis = analyzeReadmeFallback(item.description || '')
-          }
-
+        // 处理第一页数据 - 暂时移除AI分析
+        for (const item of searchResponse.data.items) {
           const result = {
             full_name: item.full_name,
             description: item.description,
@@ -102,46 +94,29 @@ export async function GET(req: NextRequest) {
             owner: item.owner?.login || '',
             owner_avatar: item.owner?.avatar_url || '',
             owner_html_url: item.owner?.html_url || '',
-            readme_analysis: readmeAnalysis,
+            // 暂时移除AI分析字段
+            comprehensive_analysis: null,
           }
           send({ type: 'result', result })
         }
 
         // 继续获取更多页面数据（最多10页，即1000条）
-        const totalPages = Math.min(Math.ceil((json.total_count || 0) / 100), 10)
-        for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+        const totalPages = Math.min(Math.ceil(searchResponse.data.total_count / 100), 10)
+        const endPage = Math.min(start_page + 9, totalPages) // 从start_page开始，最多加载10页
+        for (let pageNum = start_page + 1; pageNum <= endPage; pageNum++) {
           try {
-            const nextUrl = new URL('https://api.github.com/search/repositories')
-            nextUrl.searchParams.set('q', q.join(' '))
-            nextUrl.searchParams.set('sort', 'stars')
-            nextUrl.searchParams.set('order', 'desc')
-            nextUrl.searchParams.set('per_page', '100')
-            nextUrl.searchParams.set('page', pageNum.toString())
-
-            const nextRes = await fetch(nextUrl, { headers: ghHeaders, signal })
-            if (!nextRes.ok) break
+            console.log(`Fetching page ${pageNum}...`)
             
-            const nextJson = await nextRes.json()
-            for (const item of (nextJson.items || [])) {
-              // 获取README内容
-              let readmeAnalysis: ReadmeAnalysis | null = null
-              try {
-                const readmeUrl = `https://api.github.com/repos/${item.full_name}/readme`
-                const readmeRes = await fetch(readmeUrl, { headers: ghHeaders, signal })
-                if (readmeRes.ok) {
-                  const readmeData = await readmeRes.json()
-                  const readmeContent = Buffer.from(readmeData.content, 'base64').toString('utf-8')
-                  readmeAnalysis = await analyzeReadme(readmeContent, item.full_name)
-                } else {
-                  // 如果README获取失败，使用fallback分析
-                  readmeAnalysis = analyzeReadmeFallback(item.description || '')
-                }
-              } catch (err) {
-                console.error(`Failed to fetch README for ${item.full_name}:`, err)
-                // 如果README获取失败，使用fallback分析
-                readmeAnalysis = analyzeReadmeFallback(item.description || '')
-              }
-
+            const nextSearchResponse = await octokit.rest.search.repos({
+              q,
+              sort: 'stars',
+              order: 'desc',
+              per_page: 100,
+              page: pageNum
+            })
+            
+            for (const item of nextSearchResponse.data.items) {
+              // 暂时移除AI分析，只返回基础数据
               const result = {
                 full_name: item.full_name,
                 description: item.description,
@@ -153,7 +128,8 @@ export async function GET(req: NextRequest) {
                 owner: item.owner?.login || '',
                 owner_avatar: item.owner?.avatar_url || '',
                 owner_html_url: item.owner?.html_url || '',
-                readme_analysis: readmeAnalysis,
+                // 暂时移除AI分析字段
+                comprehensive_analysis: null,
               }
               send({ type: 'result', result })
             }
@@ -167,6 +143,7 @@ export async function GET(req: NextRequest) {
         send({ type: 'end' })
         controller.close()
       } catch (err: any) {
+        console.error('Search error:', err)
         send({ type: 'error', message: err?.message || 'unknown error' })
         controller.close()
       }
@@ -185,5 +162,3 @@ export async function GET(req: NextRequest) {
     },
   })
 }
-
-
